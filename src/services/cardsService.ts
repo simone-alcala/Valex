@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 import * as card from'../repositories/cardRepository.js';
 import * as employee from'../repositories/employeeRepository.js';
 import * as company from'../repositories/companyRepository.js';
+import * as payment from '../repositories/paymentRepository.js';
+import * as recharge from '../repositories/rechargeRepository.js';
 
 dotenv.config();
 const cryptr = new Cryptr(process.env.CRYPTR);
@@ -68,7 +70,7 @@ async function createCard(employeeInfo: any, cardType: string){
     securityCode: cvv,
     expirationDate: expirationDate,
     isVirtual: true,
-    isBlocked: true,
+    isBlocked: false,
     type: cardType as card.TransactionTypes
   };
 
@@ -114,3 +116,156 @@ function generateCardNumber(){
   return faker.finance.creditCardNumber();
 }
 
+export async function validateActivateCard(cardId: string, securityCode: string, password: number){
+  if (!cardId || !securityCode || !password) 
+    throw { type: 'unprocessable_entity', message: 'card id, securityCode and password are required' }
+
+  if ( isNaN(+cardId) ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid card id' }
+
+  if ( isNaN(password) || password.toString().length !== 4 ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid password' }
+
+  if ( isNaN(+securityCode) || securityCode.length !== 3 ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid security code' }
+
+  const cardInfo = await getCardById(+cardId);
+
+  if (!cardInfo)
+    throw { type: 'not_found', message: 'Card not found' }
+
+  if (getDecryptCvc(cardInfo.securityCode) !== securityCode)   
+    throw { type: 'unauthorized', message: 'Invalid security code' }
+
+  if (isCardExpired(cardInfo.expirationDate))
+    throw { type: 'conflict', message: 'Expired card' }
+
+  if ( isActiveCard(cardInfo.password) )
+    throw { type: 'conflict', message: 'Card already activated' }
+
+  return await activateCard(cardInfo, password);
+}
+
+async function getCardById(cardId){
+  return await card.findById(cardId);
+}
+
+function isCardExpired(expirationDate: string){
+  const today = dayjs().format('YY/MM');
+  const convertedExpirationDate = expirationDate.split('/').reverse().join('/');
+
+  return today > convertedExpirationDate;
+}
+
+function isActiveCard(password: string){
+  if (password) return true;
+  return false;
+}
+
+async function activateCard(cardInfo: any, password: number) {
+
+  const updateCard: card.CardUpdateData = {
+    password: cryptr.encrypt(password)
+  };
+
+  return await card.update(cardInfo.id,updateCard);
+}
+
+export async function validateBlockCard(cardId: string, password: number){
+  if (!cardId || !password) 
+    throw { type: 'unprocessable_entity', message: 'card id and password are required' }
+
+  if ( isNaN(+cardId) ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid card id' }
+
+  if ( isNaN(password) || password.toString().length !== 4 ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid password' }
+
+  const cardInfo = await getCardById(+cardId);
+
+  if (!cardInfo)
+    throw { type: 'not_found', message: 'Card not found' }
+
+  if (getDecryptPassword(cardInfo.password) !== password.toString())
+    throw { type: 'unauthorized', message: 'Invalid password' }  
+
+  if (isCardExpired(cardInfo.expirationDate))
+    throw { type: 'conflict', message: 'Expired card' }
+
+  if ( cardInfo.isBlocked )
+    throw { type: 'conflict', message: 'Card already blocked' }
+
+  return await blockCard(cardInfo);
+}
+
+function getDecryptPassword(password: string){
+  return cryptr.decrypt(password);
+}
+
+async function blockCard(cardInfo: any){
+  const updateCard: card.CardUpdateData = {
+    isBlocked: true
+  };
+
+  return await card.update(cardInfo.id,updateCard);
+}
+
+export async function validateUnblockCard(cardId: string, password: number){
+  if (!cardId || !password) 
+    throw { type: 'unprocessable_entity', message: 'card id and password are required' }
+
+  if ( isNaN(+cardId) ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid card id' }
+
+  if ( isNaN(password) || password.toString().length !== 4 ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid password' }
+
+  const cardInfo = await getCardById(+cardId);
+
+  if (!cardInfo)
+    throw { type: 'not_found', message: 'Card not found' }
+
+  if (getDecryptPassword(cardInfo.password) !== password.toString())
+    throw { type: 'unauthorized', message: 'Invalid password' }  
+
+  if (isCardExpired(cardInfo.expirationDate))
+    throw { type: 'conflict', message: 'Expired card' }
+
+  if ( !cardInfo.isBlocked )
+    throw { type: 'conflict', message: 'Card already unblocked' }
+
+  return await unblockCard(cardInfo);
+}
+
+async function unblockCard(cardInfo: any){
+  const updateCard: card.CardUpdateData = {
+    isBlocked: false
+  };
+
+  return await card.update(cardInfo.id,updateCard);
+}
+
+export async function validateGetTransactions(cardId: string){
+  if (!cardId ) 
+    throw { type: 'unprocessable_entity', message: 'card id is required' }
+
+  if ( isNaN(+cardId) ) 
+    throw { type: 'unprocessable_entity', message: 'Invalid card id' }
+  
+  const cardInfo = await getCardById(+cardId);
+
+  if (!cardInfo)
+    throw { type: 'not_found', message: 'Card not found' }
+
+  return await getTransactions(+cardId);
+}
+
+async function getTransactions(cardId: number){
+  const transactions = await payment.findByCardId(cardId);
+  const recharges = await recharge.findByCardId(cardId);
+
+  const balanceTemp = transactions.reduce((prev, cur) => prev + cur.amount, 0);
+  const balance = recharges.reduce((prev, cur) => prev + cur.amount, balanceTemp);
+
+  return { balance, transactions, recharges };
+}
