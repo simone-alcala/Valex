@@ -15,7 +15,7 @@ export async function validateCreateRecharge(apikey: string | string [], cardId:
   if ( isNaN(amount) ) 
     throw { type: 'unprocessable_entity', message: 'Invalid amount' }  
 
-  if ( amount <= 0 ) 
+  if ( +amount <= 0 ) 
     throw { type: 'unprocessable_entity', message: 'Invalid amount' }
 
   const companyInfo = await getCompany(apikey as string); 
